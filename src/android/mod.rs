@@ -13,6 +13,13 @@ struct ValuePair {
     value: String,
 }
 
+#[cfg(feature = "bionic-deprecated")]
+const PROPERTY_NAME_MAX: usize = 32;
+
+#[cfg(feature = "bionic-deprecated")]
+const PROPERTY_VALUE_MAX: usize = 92;
+
+#[cfg(not(feature = "bionic-deprecated"))]
 unsafe fn property_callback(cookie: *mut ValuePair, name: *const c_char, value: *const c_char, _serial: u32) {
     let cname = CStr::from_ptr(name);
     let cvalue = CStr::from_ptr(value);
@@ -20,6 +27,7 @@ unsafe fn property_callback(cookie: *mut ValuePair, name: *const c_char, value: 
     (*cookie).value = cvalue.to_str().unwrap().to_string();
 }
 
+#[cfg(not(feature = "bionic-deprecated"))]
 unsafe fn foreach_property_callback(pi: *const c_void, cookie: *mut Vec<AndroidProperty>) {
     let mut result = Box::new(ValuePair {
         name: String::new(),
@@ -32,17 +40,57 @@ unsafe fn foreach_property_callback(pi: *const c_void, cookie: *mut Vec<AndroidP
     });
 }
 
+#[cfg(feature = "bionic-deprecated")]
+unsafe fn foreach_property_callback(pi: *const c_void, cookie: *mut Vec<AndroidProperty>) {
+    let mut result = Box::new(ValuePair {
+        name: String::new(),
+        value: String::new(),
+    });
+
+    let cname = CString::new(Vec::with_capacity(PROPERTY_NAME_MAX)).unwrap();
+    let cname_raw = cname.into_raw();
+
+    let cvalue = CString::new(Vec::with_capacity(PROPERTY_VALUE_MAX)).unwrap();
+    let cvalue_raw = cvalue.into_raw();
+
+    let ret = __system_property_read(pi, cname_raw, cvalue_raw);
+
+    // retake ownership of the memory since we don't actually need the value
+    let _value_drop = CString::from_raw(cvalue_raw); 
+
+    if ret > 0 {
+        let name_len = CStr::from_ptr(cname_raw).to_bytes_with_nul().len();
+        let name = unsafe { String::from_raw_parts(cname_raw, name_len - 1, PROPERTY_NAME_MAX) };
+    
+        (*cookie).push(AndroidProperty {
+            name: name,
+            property_info: pi,
+        });
+    } else {
+        // retake ownership of the memory in case of String::from_raw_parts never get called
+        let _name_drop = CString::from_raw(cname_raw);
+    }
+}
+
 extern "C" {
     fn __system_property_set(name: *const c_char, value: *const c_char) -> c_int;
     fn __system_property_find(name: *const c_char) -> *const c_void;
-    fn __system_property_read_callback(pi: *const c_void, callback: Callback, cookie: *mut ValuePair);
-    fn __system_property_foreach(callback: ForEachCallback, cookie: *mut Vec<AndroidProperty>) -> c_int;
+
+    // Available since API 19
+    fn __system_property_foreach(callback: ForEachCallback, cookie: *mut Vec<AndroidProperty>) -> c_int; 
+}
+
+#[cfg(not(feature = "bionic-deprecated"))]
+extern "C" {
+    // Available since API 26
+    fn __system_property_read_callback(pi: *const c_void, callback: Callback, cookie: *mut ValuePair); 
 }
 
 #[cfg(feature = "bionic-deprecated")]
 extern "C" {
     /* Deprecated. Use __system_property_read_callback instead. */
     fn __system_property_get(name: *const c_char, value: *mut c_char) -> c_int;
+    fn __system_property_read(property_info: *const c_void, name: *const c_char, value: *const c_char) -> c_int;
 }
 
 /// Set system property `name` to `value`, creating the system property if it doesn't already exist
@@ -73,14 +121,17 @@ pub fn plat_getprop(_: &str, property_info: *const c_void) -> Option<String> {
 /// Retrieve a property with name `name`. Returns None if the operation fails.
 #[cfg(feature = "bionic-deprecated")]
 pub fn plat_getprop(name: &str, _: *const c_void) -> Option<String> {
-    const PROPERTY_VALUE_MAX: usize = 92;
     let cname = CString::new(name).unwrap();
     let cvalue = CString::new(Vec::with_capacity(PROPERTY_VALUE_MAX)).unwrap();
     let raw = cvalue.into_raw();
     let ret = unsafe { __system_property_get(cname.as_ptr(), raw) };
     match ret {
         len if len > 0 => unsafe { Some(String::from_raw_parts(raw as *mut u8, len as usize, PROPERTY_VALUE_MAX)) },
-        _ => None,
+        _ => {
+            // retake ownership of the memory in case of String::from_raw_parts never get called
+            let _value_drop = CString::from_raw(raw);
+            None
+        }
     }
 }
 
