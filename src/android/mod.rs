@@ -147,16 +147,7 @@ pub fn plat_prop_values() -> impl Iterator<Item = AndroidProperty> {
 /// Find property_info pointer using bionic syscall
 ///
 /// returns nullptr if not found, otherwise valid pointer
-#[cfg(not(feature = "bionic-deprecated"))]
 pub fn plat_get_property_info(name: &str) -> *const c_void {
     let cname = CString::new(name).unwrap();
     unsafe { __system_property_find(cname.as_ptr()) }
-}
-
-/// Deprecated version to find property_info pointer
-///
-/// Always returns nullptr
-#[cfg(feature = "bionic-deprecated")]
-pub fn plat_get_property_info(_name: &str) -> *const c_void {
-    std::ptr::null()
 }
